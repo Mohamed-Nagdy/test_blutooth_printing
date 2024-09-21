@@ -14,10 +14,12 @@ dependencies:
     sdk: flutter
 
   cupertino_icons: ^1.0.8
-  bluetooth_print: ^4.3.0
+  esc_pos_bluetooth: ^0.4.1
   pdf: ^3.5.1
   pdfx: ^2.7.0
   path_provider: ^2.0.11
+  oktoast: ^3.4.0
+  esc_pos_utils: ^1.1.0
 
 dev_dependencies:
   flutter_test:

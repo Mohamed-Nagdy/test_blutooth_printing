@@ -1,12 +1,12 @@
-import 'dart:convert';
-import 'dart:developer';
 import 'dart:io';
 
-import 'package:bluetooth_print/bluetooth_print.dart';
-import 'package:bluetooth_print/bluetooth_print_model.dart';
 import 'package:blutooth_print_app/pdf_creator.dart';
 import 'package:blutooth_print_app/pdf_to_img_conveter.dart';
+import 'package:esc_pos_bluetooth/esc_pos_bluetooth.dart';
+import 'package:esc_pos_utils/esc_pos_utils.dart';
+import 'package:flutter/material.dart' hide Image;
 import 'package:flutter/material.dart';
+import 'package:oktoast/oktoast.dart';
 
 void main() {
   runApp(const MyApp());
@@ -17,14 +17,16 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Bluetooth Printing',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepOrange),
-        useMaterial3: true,
+    return OKToast(
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'Bluetooth Printing',
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepOrange),
+          useMaterial3: true,
+        ),
+        home: const MyHomePage(title: 'Test Blutooth Printing'),
       ),
-      home: const MyHomePage(title: 'Test Blutooth Printing'),
     );
   }
 }
@@ -39,102 +41,121 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  BluetoothPrint bluetoothPrint = BluetoothPrint.instance;
-  BluetoothDevice? choosedDevice;
-  bool connected = false;
+  PrinterBluetoothManager printerManager = PrinterBluetoothManager();
+  List<PrinterBluetooth> _devices = [];
 
   @override
   void initState() {
     super.initState();
-    bluetoothPrint.startScan(timeout: const Duration(seconds: 4));
-    bluetoothPrint.state.listen((state) async {
-      log('cur device status: $state');
-      switch (state) {
-        case BluetoothPrint.CONNECTED:
-          setState(() {
-            connected = true;
-          });
-          break;
-        case BluetoothPrint.DISCONNECTED:
-          setState(() {
-            connected = false;
-          });
-          break;
-        default:
-          break;
-      }
+
+    printerManager.scanResults.listen((devices) async {
+      // print('UI: Devices found ${devices.length}');
+      setState(() {
+        _devices = devices;
+      });
     });
+  }
+
+  void _startScanDevices() {
+    setState(() {
+      _devices = [];
+    });
+    printerManager.startScan(const Duration(seconds: 4));
+  }
+
+  void _stopScanDevices() {
+    printerManager.stopScan();
+  }
+
+  Future<List<int>> demoReceipt(
+      PaperSize paper, CapabilityProfile profile) async {
+    final Generator ticket = Generator(paper, profile);
+    List<int> bytes = [];
+
+    File pdfFile = await PdfGenerator.createInvoicePdf();
+    File imgFile = await PdfConverter.convertToImage(pdfFile.path);
+    List<int> data = await imgFile.readAsBytes();
+    bytes += data;
+
+    ticket.feed(2);
+    ticket.cut();
+    return bytes;
+  }
+
+  void _testPrint(PrinterBluetooth printer) async {
+    printerManager.selectPrinter(printer);
+
+    const PaperSize paper = PaperSize.mm80;
+    final profile = await CapabilityProfile.load();
+
+    final PosPrintResult res = await printerManager.printTicket(
+      (await demoReceipt(paper, profile)),
+    );
+
+    showToast(res.msg);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         title: Text(widget.title),
-        actions: [
-          IconButton(
-            onPressed: () {
-              bluetoothPrint.startScan(timeout: const Duration(seconds: 4));
-            },
-            icon: const Icon(Icons.bluetooth_searching),
-          ),
-          if (connected)
-            IconButton(
-              onPressed: () {
-                printInvoice();
-              },
-              icon: const Icon(Icons.print),
-            ),
-        ],
       ),
-      body: StreamBuilder<List<BluetoothDevice>>(
-        stream: bluetoothPrint.scanResults,
-        initialData: const [],
-        builder: (c, snapshot) => Column(
-          children: snapshot.data
-                  ?.map(
-                    (d) => ListTile(
-                      title: Text(d.name ?? ''),
-                      subtitle: Text(d.address ?? ''),
-                      onTap: () async {
-                        setState(() {
-                          choosedDevice = d;
-                        });
-                        if (choosedDevice != null) {
-                          await bluetoothPrint.connect(choosedDevice!);
-                        }
-                      },
-                      trailing: choosedDevice != null &&
-                              choosedDevice?.address == d.address
-                          ? const Icon(
-                              Icons.check,
-                              color: Colors.green,
-                            )
-                          : null,
+      body: ListView.builder(
+          itemCount: _devices.length,
+          itemBuilder: (BuildContext context, int index) {
+            return InkWell(
+              onTap: () => _testPrint(_devices[index]),
+              child: Column(
+                children: <Widget>[
+                  Container(
+                    height: 60,
+                    padding: const EdgeInsets.only(left: 10),
+                    alignment: Alignment.centerLeft,
+                    child: Row(
+                      children: <Widget>[
+                        const Icon(Icons.print),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: <Widget>[
+                              Text(_devices[index].name ?? ''),
+                              Text(_devices[index].address!),
+                              Text(
+                                'Click to print a test receipt',
+                                style: TextStyle(color: Colors.grey[700]),
+                              ),
+                            ],
+                          ),
+                        )
+                      ],
                     ),
-                  )
-                  .toList() ??
-              [],
-        ),
+                  ),
+                  const Divider(),
+                ],
+              ),
+            );
+          }),
+      floatingActionButton: StreamBuilder<bool>(
+        stream: printerManager.isScanningStream,
+        initialData: false,
+        builder: (c, snapshot) {
+          if (snapshot.data!) {
+            return FloatingActionButton(
+              onPressed: _stopScanDevices,
+              backgroundColor: Colors.red,
+              child: const Icon(Icons.stop),
+            );
+          } else {
+            return FloatingActionButton(
+              onPressed: _startScanDevices,
+              child: const Icon(Icons.search),
+            );
+          }
+        },
       ),
     );
-  }
-
-  Future<void> printInvoice() async {
-    List<LineText> list = [];
-    File pdfFile = await PdfGenerator.createInvoicePdf();
-    File imgFile = await PdfConverter.convertToImage(pdfFile.path);
-    List<int> data = await imgFile.readAsBytes();
-    String base64Image = base64Encode(data);
-    list.add(
-      LineText(
-        type: LineText.TYPE_IMAGE,
-        content: base64Image,
-        align: LineText.ALIGN_CENTER,
-        linefeed: 1,
-      ),
-    );
-    await bluetoothPrint.printReceipt({}, list);
   }
 }
